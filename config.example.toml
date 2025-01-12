@@ -1,0 +1,99 @@
+# Zero-cost default configuration: every route terminates at a deterministic fake
+# provider, so this file needs no credentials and no network.
+#
+# Demo keys (local only, not secrets): alpha = "demo-key-alpha", beta = "demo-key-beta"
+# Replace the hashes before any non-demo use: cost-firewall hash-key <your-key>
+
+[server]
+host = "127.0.0.1"
+port = 8787
+max_body_bytes = 1048576
+request_timeout_seconds = 30.0
+log_prompts = false
+fail_closed = true
+log_level = "INFO"
+
+[database]
+path = "gateway.db"
+
+[limits]
+max_messages = 64
+max_input_chars = 200000
+default_max_output_tokens = 512
+max_output_tokens = 4096
+reservation_ttl_seconds = 120
+
+[redaction]
+# Forwarding redacted text changes user prompts. Off by default; logs are always redacted.
+redact_before_forward = false
+
+[[projects]]
+id = "alpha"
+name = "Alpha (demo)"
+api_keys = ["e49052cb77a35e3ebf86f7d184651dbf07b0fc8707d8ecb748fbf759b0a1d129"]
+monthly_budget_usd = 0.05
+daily_budget_usd = 0.02
+per_request_max_usd = 0.005
+requests_per_minute = 600
+max_concurrency = 16
+retention_days = 30
+allowed_models = ["gpt-4o-mini", "claude-haiku", "local-small"]
+
+[[projects]]
+id = "beta"
+name = "Beta (demo)"
+api_keys = ["f0151b84a66c52ae9d90f60e7a45a0ebc7fa3560a96f32700ab4ed9d36614a7e"]
+monthly_budget_usd = 1.00
+per_request_max_usd = 0.02
+requests_per_minute = 60
+max_concurrency = 4
+retention_days = 7
+allowed_models = ["gpt-4o-mini", "claude-haiku"]
+
+# `fail_first = 2` makes the primary provider fail twice with a transient error, so
+# the documented smoke scenario exercises classified fallback out of the box.
+[[providers]]
+id = "fake-primary"
+type = "fake"
+fail_first = 2
+fail_status = 503
+fail_class = "transient"
+
+[[providers]]
+id = "fake-backup"
+type = "fake"
+latency_ms = 5
+
+[[providers]]
+id = "fake-permanent"
+type = "fake"
+fail_first = 1000
+fail_status = 400
+fail_class = "permanent"
+
+[[routes]]
+model = "gpt-4o-mini"
+targets = [
+  { provider = "fake-primary", model = "gpt-4o-mini", input_usd_per_1m = 0.15, output_usd_per_1m = 0.60 },
+  { provider = "fake-backup", model = "gpt-4o-mini", input_usd_per_1m = 0.15, output_usd_per_1m = 0.60 },
+]
+
+[[routes]]
+model = "claude-haiku"
+targets = [
+  { provider = "fake-primary", model = "claude-haiku", input_usd_per_1m = 0.80, output_usd_per_1m = 4.00 },
+  { provider = "fake-backup", model = "claude-haiku", input_usd_per_1m = 0.80, output_usd_per_1m = 4.00 },
+]
+
+[[routes]]
+model = "local-small"
+targets = [
+  { provider = "fake-backup", model = "local-small", input_usd_per_1m = 0, output_usd_per_1m = 0 },
+]
+
+# A route whose only target fails permanently: proves no fallback for permanent errors.
+[[routes]]
+model = "strict-model"
+targets = [
+  { provider = "fake-permanent", model = "strict-model", input_usd_per_1m = 0.10, output_usd_per_1m = 0.40 },
+]

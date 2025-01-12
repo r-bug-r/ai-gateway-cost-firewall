@@ -1,0 +1,88 @@
+# Optional live-provider configuration. NOT part of the $0 path.
+#
+# This file is documentation-by-example: copy it to `config.live.toml`, set the
+# environment variables named below, and start the gateway with
+#   cost-firewall serve --config config.live.toml
+#
+# Safety gates before using it (see docs/operations.md):
+#   * the fake-provider path must already pass the smoke scenario;
+#   * `monthly_budget_usd` must be a hard cap you can afford;
+#   * `per_request_max_usd` must be small;
+#   * live calls are opt-in and never required by tests or CI.
+#
+# The two fake providers below keep the route usable with no credentials, so a
+# missing key produces a classified permanent error and a recorded failed attempt
+# instead of a charge.
+
+[server]
+host = "127.0.0.1"
+port = 8787
+fail_closed = true
+
+[database]
+path = "gateway-live.db"
+
+[limits]
+default_max_output_tokens = 256
+max_output_tokens = 1024
+
+[redaction]
+# Set to true to forward already-redacted text. This changes user prompts; it is
+# documented as a lossy transformation, not a security guarantee.
+redact_before_forward = false
+
+[[projects]]
+id = "live"
+name = "Live provider smoke (bounded)"
+api_keys = ["e49052cb77a35e3ebf86f7d184651dbf07b0fc8707d8ecb748fbf759b0a1d129"]
+monthly_budget_usd = 1.00
+daily_budget_usd = 0.10
+per_request_max_usd = 0.01
+requests_per_minute = 10
+max_concurrency = 2
+retention_days = 7
+
+[[providers]]
+id = "openai"
+type = "openai_compatible"
+base_url = "https://api.openai.com/v1"
+api_key_env = "GATEWAY_OPENAI_API_KEY"
+timeout_seconds = 30.0
+
+[[providers]]
+id = "anthropic"
+type = "anthropic"
+base_url = "https://api.anthropic.com"
+api_key_env = "GATEWAY_ANTHROPIC_API_KEY"
+timeout_seconds = 30.0
+
+# Local Ollama (no key, no cost). Start with: ollama serve
+[[providers]]
+id = "ollama"
+type = "openai_compatible"
+base_url = "http://127.0.0.1:11434/v1"
+timeout_seconds = 120.0
+
+[[providers]]
+id = "fake-backup"
+type = "fake"
+
+[[routes]]
+model = "gpt-4o-mini"
+targets = [
+  { provider = "openai", model = "gpt-4o-mini", input_usd_per_1m = 0.15, output_usd_per_1m = 0.60 },
+  { provider = "fake-backup", model = "gpt-4o-mini", input_usd_per_1m = 0.15, output_usd_per_1m = 0.60 },
+]
+
+[[routes]]
+model = "claude-haiku"
+targets = [
+  { provider = "anthropic", model = "claude-3-5-haiku-20241022", input_usd_per_1m = 0.80, output_usd_per_1m = 4.00 },
+  { provider = "fake-backup", model = "claude-haiku", input_usd_per_1m = 0.80, output_usd_per_1m = 4.00 },
+]
+
+[[routes]]
+model = "local-small"
+targets = [
+  { provider = "ollama", model = "llama3.2:1b", input_usd_per_1m = 0, output_usd_per_1m = 0 },
+]
