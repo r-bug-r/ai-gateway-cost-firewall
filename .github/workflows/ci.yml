@@ -1,0 +1,76 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      - name: Lint
+        run: python -m ruff check src tests scripts
+
+      - name: Format
+        run: python -m ruff format --check src tests scripts
+
+      - name: Type check
+        run: python -m mypy
+
+      - name: Unit and integration tests
+        run: python -m pytest tests -q
+
+      - name: End-to-end smoke
+        run: python scripts/smoke.py
+
+      - name: Config validation
+        run: python -m cost_firewall.cli check-config --config config.example.toml
+
+  container:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build image
+        run: docker build -t cost-firewall:ci .
+
+      - name: Run container and probe health
+        run: |
+          docker run -d --name cost-firewall-ci -p 8787:8787 \
+            -v "$PWD/config.example.toml:/config/config.toml:ro" \
+            cost-firewall:ci
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8787/healthz; then exit 0; fi
+            sleep 1
+          done
+          echo "container did not become healthy" >&2
+          docker logs cost-firewall-ci
+          exit 1
+
+      - name: Container logs
+        if: always()
+        run: docker logs cost-firewall-ci || true
