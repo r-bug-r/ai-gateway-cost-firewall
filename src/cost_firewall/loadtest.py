@@ -7,8 +7,10 @@ exceeded the configured budget and every settled request reconciles with its att
 
 from __future__ import annotations
 
-import json
+import contextlib
+import tempfile
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
@@ -28,13 +30,22 @@ def run_in_process(
     requests: int,
     model: str,
     max_tokens: int,
+    database_path: str | None = None,
 ) -> dict[str, Any]:
-    """Fire `requests` concurrent chat calls and audit the resulting ledger state."""
+    """Fire `requests` concurrent chat calls and audit the resulting ledger state.
+
+    Without `database_path` the run uses a throwaway ledger: a benchmark must not
+    consume the deployment's real budget or inherit a previous run's spend.
+    """
     project = config.project(project_id)
     if project is None:
         raise ValueError(f"Unknown project '{project_id}'")
+    workdir: tempfile.TemporaryDirectory[str] | None = None
+    if database_path is None:
+        workdir = tempfile.TemporaryDirectory(prefix="cost-firewall-loadtest-")
+        database_path = str(Path(workdir.name) / "loadtest.db")
     # Each thread gets its own Ledger handle, matching separate gateway processes.
-    ledger = Ledger(config.database.path)
+    ledger = Ledger(database_path)
     gateway = Gateway(config, ledger)
 
     results: list[str] = []
@@ -65,6 +76,7 @@ def run_in_process(
             barrier.wait()
         worker(index)
 
+    started = time.perf_counter()
     with ThreadPoolExecutor(max_workers=concurrency) as pool:
         futures = [pool.submit(gated_worker, index) for index in range(requests)]
         for future in futures:
@@ -73,6 +85,7 @@ def run_in_process(
             except Exception as exc:  # pragma: no cover - defensive
                 with lock:
                     errors.append(f"{type(exc).__name__}: {exc}")
+    duration_ms = round((time.perf_counter() - started) * 1000)
 
     report = ledger.usage_report(project_id=project_id)
     snapshot = ledger.snapshot(
@@ -87,10 +100,18 @@ def run_in_process(
     counts: dict[str, int] = {}
     for outcome in results:
         counts[outcome] = counts.get(outcome, 0) + 1
+    ledger.close()
+    if workdir is not None:
+        # Windows may still hold the SQLite handle for a moment after close.
+        with contextlib.suppress(PermissionError):
+            workdir.cleanup()
     return {
+        "mode": "in_process",
         "project": project_id,
         "concurrency": concurrency,
         "requests": requests,
+        "duration_ms": duration_ms,
+        "requests_per_second": round(requests / (duration_ms / 1000), 1) if duration_ms else None,
         "outcomes": counts,
         "unexpected_errors": errors,
         "monthly_budget_micros": project.monthly_budget_micros,
@@ -114,6 +135,7 @@ def run_loadtest(
     model: str | None,
     max_tokens: int,
     base_url: str | None = None,
+    database_path: str | None = None,
 ) -> dict[str, Any]:
     config = load_config(Path(config_path))
     project_id = project or config.projects[0].id
@@ -171,10 +193,20 @@ def _run_http(
         with lock:
             outcomes.append(outcome)
 
+    started = time.perf_counter()
     with ThreadPoolExecutor(max_workers=concurrency) as pool:
         list(pool.map(worker, range(requests)))
+    duration_ms = round((time.perf_counter() - started) * 1000)
 
     counts: dict[str, int] = {}
     for outcome in outcomes:
         counts[outcome] = counts.get(outcome, 0) + 1
-    return {"mode": "http", "base_url": base_url, "outcomes": counts, "raw": json.dumps(counts)}
+    return {
+        "mode": "http",
+        "base_url": base_url,
+        "requests": requests,
+        "concurrency": concurrency,
+        "duration_ms": duration_ms,
+        "requests_per_second": round(requests / (duration_ms / 1000), 1) if duration_ms else None,
+        "outcomes": counts,
+    }

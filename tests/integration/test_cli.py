@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from cost_firewall.cli import main
+from cost_firewall.config import load_config
 from cost_firewall.ledger import Ledger
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -243,4 +244,15 @@ def test_loadtest_in_process_respects_budget(
     assert result["within_budget"] is True
     assert result["reconciled"] is True
     assert result["committed_micros"] <= result["monthly_budget_micros"]
+    assert result["mode"] == "in_process"
+    assert result["duration_ms"] > 0
     assert code in (0, 4)
+
+    # A benchmark must not consume the deployment's budget: the configured ledger
+    # stays untouched, so repeating the command yields the same verdict.
+    config = load_config(config_path)
+    ledger = Ledger(config.database.path)
+    try:
+        assert ledger.usage_report(project_id="alpha")["requests"] == 0
+    finally:
+        ledger.close()

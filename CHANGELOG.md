@@ -31,6 +31,12 @@ ledger, budgets, routing, redaction, metrics, CLI, container image.
   `loadtest`.
 - `scripts/smoke.py`: end-to-end HTTP check of fallback, permanent failure, budget
   exhaustion, reconciliation, trace privacy, redaction, metrics, auth, and allowlists.
+- `scripts/http_bench.py`: concurrent HTTP probe that reports wall time, throughput, and
+  p50/p95 latency, and asserts reconciliation and no overspend.
+- `loadtest` reports wall time and throughput, and uses a throwaway ledger by default
+  (`--database` to keep one) so a benchmark never consumes the deployment's budget.
+- Upstream response bodies are bounded at 4 MiB; an oversized body is a permanent
+  provider failure rather than unbounded memory growth.
 - Container image with an unprivileged user and a `HEALTHCHECK`.
 - Documentation: architecture, API, operations, threat model, privacy, development, ADRs.
 

@@ -219,25 +219,40 @@ gates.
 
 ## Measured performance
 
-Measured on the development machine (Windows, Python 3.12, one gateway process, SQLite on
-local disk). Method: `cost-firewall loadtest` in-process for the ledger path, and an HTTP
-load script against a running server for the transport path. Every run also asserts that
-settled spend never exceeded the cap and that every settled request reconciled.
+Measured on the development machine (Windows, Python 3.12, SQLite on local disk, one gateway
+process, `config.example.toml`). Both commands below create their own throwaway ledger, so a
+run never inherits a previous run's spend and the numbers are repeatable.
 
-| Path | Requests | Concurrency | Result |
+```bash
+# In-process: gateway + ledger, no HTTP. Exercises the budget transaction.
+COST_FIREWALL_API_KEY=demo-key-alpha cost-firewall loadtest \
+    --config config.example.toml --concurrency 16 --requests 400
+
+# Over HTTP against a real uvicorn process on a free port.
+python scripts/http_bench.py --requests 400 --concurrency 16
+```
+
+Three consecutive runs each, 400 requests at concurrency 16:
+
+| Path | Wall time | Throughput | Latency |
 | --- | --- | --- | --- |
-| In-process gateway + ledger | 400 | 16 | ~2.0 s, ~196 req/s, all reconciled, no overspend |
-| HTTP, `POST /v1/chat/completions` | 500 | 32 | all `200`, p50 ~0.7 s, p95 ~2.3 s |
-| HTTP baseline, trivial FastAPI app, same box | 200 | 32 | ~24 req/s |
+| In-process gateway + ledger | 1.2 s – 6.0 s | 67 – 347 req/s | — |
+| HTTP `POST /v1/chat/completions` | 5.6 s – 6.9 s | 58 – 71 req/s | p50 42–70 ms, p95 0.7–0.8 s |
 
-The last row is the control: on this machine the HTTP harness itself saturates around
-24–32 req/s at concurrency 32, so the gateway's HTTP numbers measure the harness, not the
-gateway. The in-process number is the meaningful throughput figure for the budget path.
-Re-measure on your own hardware before publishing capacity claims; the repository does not
-claim a production throughput target.
+The spread is the point: the ledger runs with `synchronous=FULL`, so every request waits on
+two or three fsyncs, and the in-process time tracks disk and antivirus latency on the host.
+The fast runs are ~350 req/s; a single stall drops a whole run to ~67 req/s. The HTTP path is
+slower and more stable because the client threads, JSON encoding, and uvicorn's thread pool
+dominate. Do not treat either figure as a capacity target — re-measure on your hardware.
 
-Correctness under concurrency is the property the tests assert: 400 concurrent requests
-against a budget that only fits a subset, with zero overspend and zero unreconciled rows.
+Correctness under concurrency is what the runs assert, not speed: every run reported
+`"reconciled": true`, `"within_budget": true`, and no unexpected errors. The HTTP run
+settled $0.003200 for 400 requests with zero rejections at concurrency 16; the in-process
+run with a budget that fits only a subset reports `budget_exhausted` outcomes and still
+never exceeds the cap.
+
+`--concurrency` above `projects[].max_concurrency` produces `429 concurrency_limit`
+responses by design; the load test counts them as outcomes rather than failures.
 
 ## Upgrades
 

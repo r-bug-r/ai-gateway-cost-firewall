@@ -191,6 +191,7 @@ def cmd_loadtest(args: argparse.Namespace) -> int:
         model=args.model,
         max_tokens=args.max_tokens,
         base_url=args.base_url,
+        database_path=args.database,
     )
     _print_json(result)
     return 0 if result["within_budget"] and result["reconciled"] else 4
@@ -265,6 +266,12 @@ def build_parser() -> argparse.ArgumentParser:
     load.add_argument("--model", default=None)
     load.add_argument("--max-tokens", type=int, default=256)
     load.add_argument("--base-url", default=None)
+    load.add_argument(
+        "--database",
+        default=None,
+        help="Ledger file to use. Defaults to a throwaway ledger so a benchmark "
+        "never consumes the deployment's budget.",
+    )
     load.set_defaults(func=cmd_loadtest)
 
     return parser

@@ -103,8 +103,11 @@ library may not.
 - `cost-firewall trace <request_id> --config config.toml` shows attempts and cost.
 - `cost-firewall dry-run --model <m> --prompt <p>` shows the routing and budget decision
   without spending anything.
-- `cost-firewall loadtest --concurrency 32 --requests 400` prints whether the ledger
-  overspent and whether every settled request reconciled.
+- `cost-firewall loadtest --concurrency 16 --requests 400` prints wall time, throughput, and
+  whether the ledger overspent or left unreconciled rows. It uses a throwaway ledger unless
+  `--database` names one.
+- `python scripts/http_bench.py --requests 400 --concurrency 16` does the same over real
+  HTTP and reports p50/p95 latency.
 - Set `log_level = "DEBUG"` for metadata logging; `log_prompts = true` only for a bounded
   session, and remember the prompts land in your log sink.
 
