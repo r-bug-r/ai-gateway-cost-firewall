@@ -1,0 +1,41 @@
+# Cost-control example: a hard monthly cap.
+#
+# Prices below are illustrative. Verify current provider prices before using this
+# file against a real provider; the gateway computes with whatever numbers are here.
+
+[server]
+host = "127.0.0.1"
+port = 8787
+fail_closed = true
+log_level = "INFO"
+
+[database]
+path = "cost-control.db"
+
+[limits]
+default_max_output_tokens = 512
+max_output_tokens = 2048
+reservation_ttl_seconds = 120
+
+[[projects]]
+id = "app"
+name = "Application under a hard cap"
+# Demo key only. Generate your own: cost-firewall hash-key <key>
+api_keys = ["e49052cb77a35e3ebf86f7d184651dbf07b0fc8707d8ecb748fbf759b0a1d129"]
+monthly_budget_usd = 0.25
+daily_budget_usd = 0.02
+per_request_max_usd = 0.05
+requests_per_minute = 1000
+max_concurrency = 4
+retention_days = 30
+allowed_models = ["assistant"]
+
+[[providers]]
+id = "primary"
+type = "fake"
+
+[[routes]]
+model = "assistant"
+targets = [
+  { provider = "primary", model = "assistant", input_usd_per_1m = 2.50, output_usd_per_1m = 10.00 },
+]
