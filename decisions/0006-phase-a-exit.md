@@ -23,7 +23,7 @@
 | --- | --- | --- |
 | Documented OpenAI-compatible subset | `models.py`, `docs/api.md` | `tests/unit/test_models.py`, smoke scenario |
 | Adapters: fake, OpenAI-compatible, Anthropic, local | `providers.py` | `tests/unit/test_providers.py` (15 tests) |
-| Per-request / daily / monthly budgets | `ledger.py`, `gateway.py` | `tests/unit/test_ledger.py`, `test_gateway.py` |
+| Per-request / daily / monthly budgets | `ledger.py`, `gateway.py` | `tests/unit/test_ledger.py`, `test_gateway.py`, `tests/integration/test_multiprocess_budget.py` |
 | Rate and concurrency limits | `limits.py` | `tests/unit/test_limits.py` |
 | Redaction of logs, opt-in forwarding | `redaction.py` | `tests/unit/test_redaction.py`, smoke |
 | Provider/model/tokens/latency/cost/outcome record | `ledger.py` (`requests`, `attempts`) | `test_ledger.py`, smoke trace check |
@@ -39,7 +39,7 @@
 All on the development machine (Windows, Python 3.12), 2026-10-20.
 
 ```text
-python -m pytest tests -q                     123 passed, 1 warning
+python -m pytest tests -q                     124 passed, 1 warning
 python -m ruff check src tests scripts examples  All checks passed
 python -m ruff format --check ...              27 files already formatted
 python -m mypy                                 Success: no issues found in 26 source files
@@ -61,6 +61,15 @@ cost-firewall loadtest --concurrency 16 --requests 400
   duration_ms 1251 / 6007 / 1152  ->  320 / 67 / 347 req/s, reconciled, within_budget
 python scripts/http_bench.py --requests 400 --concurrency 16
   5.6s / 6.9s / 5.7s  ->  71 / 58 / 70 req/s, p50 42-70ms, p95 0.7-0.8s, 400x200
+```
+
+Cross-process budget enforcement, observed (fourteen separate Python processes, one
+database file, room for ten reservations):
+
+```text
+tests/integration/test_multiprocess_budget.py   1 passed
+  grants 10, denials 4 x monthly_budget_exhausted,
+  month_committed_micros 1000 <= 1000, reconciled True
 ```
 
 `examples/cost-control/demo.py` output, observed:
