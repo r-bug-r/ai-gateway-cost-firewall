@@ -245,6 +245,11 @@ The fast runs are ~350 req/s; a single stall drops a whole run to ~67 req/s. The
 slower and more stable because the client threads, JSON encoding, and uvicorn's thread pool
 dominate. Do not treat either figure as a capacity target — re-measure on your hardware.
 
+Cross-process correctness is covered separately: `tests/integration/test_multiprocess_budget.py`
+starts fourteen Python processes against one database file with room for ten reservations and
+asserts that exactly ten are granted. That is the multi-worker shape, where the SQLite write
+lock is the entire correctness argument.
+
 Correctness under concurrency is what the runs assert, not speed: every run reported
 `"reconciled": true`, `"within_budget": true`, and no unexpected errors. The HTTP run
 settled $0.003200 for 400 requests with zero rejections at concurrency 16; the in-process

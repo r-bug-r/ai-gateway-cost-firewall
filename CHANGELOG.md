@@ -37,6 +37,8 @@ ledger, budgets, routing, redaction, metrics, CLI, container image.
   (`--database` to keep one) so a benchmark never consumes the deployment's budget.
 - Upstream response bodies are bounded at 4 MiB; an oversized body is a permanent
   provider failure rather than unbounded memory growth.
+- Cross-process budget test: fourteen separate Python processes race for a budget that
+  fits ten reservations; exactly ten are granted and the ledger reconciles.
 - Container image with an unprivileged user and a `HEALTHCHECK`.
 - Documentation: architecture, API, operations, threat model, privacy, development, ADRs.
 
