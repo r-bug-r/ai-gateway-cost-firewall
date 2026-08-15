@@ -73,7 +73,8 @@ def test_message_redaction_preserves_roles_and_order(redactor: Redactor) -> None
         temperature=None,
         idempotent=True,
     )
-    redacted = _redacted_request(request, redactor)
+    redacted, counts = _redacted_request(request, redactor)
+    assert counts == {"openai_key": 1}
     assert [message.role for message in redacted.messages] == ["system", "user"]
     assert redacted.messages[0].content == "be terse"
     assert "sk-" not in redacted.messages[1].content

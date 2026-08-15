@@ -117,7 +117,22 @@ def test_budget_exhaustion_rejects_before_forwarding() -> None:
     assert excinfo.value.status_code == 429
     assert "monthly_budget_exhausted" in excinfo.value.message
     report = gateway.ledger.usage_report(project_id="alpha")
-    assert report["requests"] == 0  # nothing was reserved or forwarded
+    # Nothing was reserved or forwarded, but the refusal itself is recorded: a
+    # firewall that hides its blocks cannot be audited.
+    assert report["requests"] == 1
+    assert report["settled_requests"] == 0
+    assert report["attempts"] == 0
+    assert report["settled_micros"] == 0
+    with gateway.ledger.connection() as conn:
+        row = conn.execute(
+            "SELECT status, decision, error_code, reserved_micros FROM requests"
+        ).fetchone()
+    assert (row["status"], row["decision"], row["error_code"]) == (
+        "failed",
+        "blocked",
+        "monthly_budget_exhausted",
+    )
+    assert row["reserved_micros"] == 0
 
 
 def test_budget_is_consumed_until_next_request_is_blocked() -> None:
@@ -195,7 +210,12 @@ def test_fail_closed_when_ledger_unavailable() -> None:
     with pytest.raises(Exception) as excinfo:
         gateway.chat(AUTH, chat_payload())
     assert "fail closed" in str(excinfo.value).lower()
-    assert gateway.ledger.usage_report(project_id="alpha")["requests"] == 0
+    report = gateway.ledger.usage_report(project_id="alpha")
+    assert report["requests"] == 1
+    assert report["attempts"] == 0
+    with gateway.ledger.connection() as conn:
+        row = conn.execute("SELECT decision, error_code FROM requests").fetchone()
+    assert (row["decision"], row["error_code"]) == ("blocked", "budget_state_unavailable")
 
 
 def test_fail_open_forwards_and_audits_when_configured() -> None:

@@ -40,7 +40,8 @@ enforcement claim only covers traffic routed through the gateway.
 | T12 | Crash mid-request | Reservations expire after the TTL, so headroom is recovered; attempts are recorded as they happen | A crash after the provider call but before settlement under-counts that request |
 | T13 | Budget state unreadable | `fail_closed = true` refuses to forward | Availability loss; this is the intended trade |
 | T14 | Sensitive data sent to a third-party provider | `redact_before_forward` rewrites prompts before forwarding | Changes model behavior; still sends the rest |
-| T15 | Operator misconfiguration | Strict TOML: unknown keys, plaintext keys, bad prices, and inconsistent limits are startup failures | A valid but wrong price table produces wrong numbers |
+| T15 | Injected script in the dashboard reads the operator's key from the page and exfiltrates spend data | The dashboard shell has no inline script or style and is served with `default-src 'none'; script-src 'self'`; the key lives only in that tab's `sessionStorage` | An operator who pastes untrusted content into the page could still be attacked by a browser extension |
+| T16 | Operator misconfiguration | Strict TOML: unknown keys, plaintext keys, bad prices, and inconsistent limits are startup failures | A valid but wrong price table produces wrong numbers |
 
 ## Explicit non-goals
 

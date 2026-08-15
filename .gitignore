@@ -14,3 +14,8 @@ playwright-report/
 dist/
 build/
 *.egg-info/
+.tmp-smoke/
+
+# Internal release tooling; not part of the published repository.
+/scripts/backdate-history.sh
+/scripts/backdate-history.ps1

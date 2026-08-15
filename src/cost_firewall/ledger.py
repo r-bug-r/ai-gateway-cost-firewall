@@ -15,6 +15,7 @@ Invariants enforced here (not in the HTTP layer):
 
 from __future__ import annotations
 
+import json
 import queue
 import sqlite3
 import threading
@@ -181,6 +182,7 @@ class RequestRow:
     created_at_ms: int
     expires_at_ms: int
     completed_at_ms: int | None
+    error_code: str | None
 
 
 @dataclass(frozen=True)
@@ -575,6 +577,62 @@ class Ledger:
 
     # -------------------------------------------------------------------- audits
 
+    @staticmethod
+    def _parse_decision(raw: str | None) -> dict[str, Any] | None:
+        """Decode the stored routing plan; never raise on a malformed row."""
+        if not raw:
+            return None
+        try:
+            value = json.loads(raw)
+        except ValueError:
+            return None
+        return value if isinstance(value, dict) else None
+
+    def record_rejection(
+        self,
+        *,
+        project_id: str,
+        request_id: str,
+        route_model: str,
+        reason: str,
+        now: int | None = None,
+    ) -> None:
+        """Persist a refused request as a zero-cost terminal row.
+
+        Rejections happen before a reservation exists, so this is the only place a
+        block becomes visible in the ledger. `decision = 'blocked'` distinguishes it
+        from a request that was admitted and later failed.
+        """
+        timestamp = now if now is not None else now_ms()
+        with self._write_transaction() as conn:
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO requests (
+                    request_id, project_id, route_model, status, idempotent,
+                    reserved_micros, settled_micros, attempts,
+                    created_at_ms, expires_at_ms, completed_at_ms, error_code, decision
+                ) VALUES (?, ?, ?, 'failed', 0, 0, 0, 0, ?, ?, ?, ?, 'blocked')
+                """,
+                (
+                    request_id,
+                    project_id,
+                    route_model,
+                    timestamp,
+                    timestamp,
+                    timestamp,
+                    reason,
+                ),
+            )
+            # The reason is also an audit event, so a refusal explains itself in the
+            # request detail view without the reader needing to decode `error_code`.
+            conn.execute(
+                """
+                INSERT INTO audit_events (at_ms, request_id, project_id, event, detail)
+                VALUES (?, ?, ?, 'request_rejected', ?)
+                """,
+                (timestamp, request_id, project_id, f"Refused before forwarding: {reason}"),
+            )
+
     def audit(
         self,
         *,
@@ -614,7 +672,125 @@ class Ledger:
             created_at_ms=row["created_at_ms"],
             expires_at_ms=row["expires_at_ms"],
             completed_at_ms=row["completed_at_ms"],
+            error_code=row["error_code"],
         )
+
+    def recent_requests(
+        self, *, project_id: str, limit: int = 50, since_ms: int | None = None
+    ) -> list[dict[str, Any]]:
+        """Newest-first request metadata for one project.
+
+        Deliberately excludes prompt and completion text: this backs the operator
+        request list, which must not leak content even when retention is enabled.
+        """
+        clauses = ["r.project_id = ?"]
+        params: list[Any] = [project_id]
+        if since_ms is not None:
+            clauses.append("r.created_at_ms >= ?")
+            params.append(since_ms)
+        params.append(limit)
+        with self.connection() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT r.request_id, r.route_model, r.status, r.reserved_micros,
+                       r.settled_micros, r.attempts, r.created_at_ms, r.completed_at_ms,
+                       r.error_code, r.decision,
+                       (SELECT a.provider FROM attempts a
+                         WHERE a.request_id = r.request_id
+                         ORDER BY a.attempt_number DESC LIMIT 1) AS last_provider
+                FROM requests r
+                WHERE {" AND ".join(clauses)}
+                ORDER BY r.created_at_ms DESC, r.rowid DESC
+                LIMIT ?
+                """,
+                params,
+            ).fetchall()
+        return [
+            {
+                "request_id": row["request_id"],
+                "route_model": row["route_model"],
+                "status": row["status"],
+                "reserved_micros": row["reserved_micros"],
+                "settled_micros": row["settled_micros"],
+                "attempts": row["attempts"],
+                "created_at_ms": row["created_at_ms"],
+                "completed_at_ms": row["completed_at_ms"],
+                "error_code": row["error_code"],
+                # `outcome` is the one-word verdict an operator scans for. A failure
+                # with no attempt never reached a provider, so it is a refusal, not
+                # a provider error; the two must not look alike in the list.
+                "outcome": (
+                    "blocked"
+                    if row["status"] == "failed" and row["attempts"] == 0
+                    else row["status"]
+                ),
+                "decision": self._parse_decision(row["decision"]),
+                "last_provider": row["last_provider"],
+            }
+            for row in rows
+        ]
+
+    def audit_for(self, request_id: str) -> list[dict[str, Any]]:
+        """Audit events attached to one request, oldest first.
+
+        Detail strings are produced by the gateway and never contain prompt text.
+        """
+        with self.connection() as conn:
+            rows = conn.execute(
+                "SELECT at_ms, event, detail FROM audit_events WHERE request_id = ? "
+                "ORDER BY at_ms, rowid",
+                (request_id,),
+            ).fetchall()
+        return [
+            {"at_ms": row["at_ms"], "event": row["event"], "detail": row["detail"]} for row in rows
+        ]
+
+    def provider_health(self, *, project_id: str, since_ms: int) -> list[dict[str, Any]]:
+        """Per-provider attempt outcomes observed inside the window.
+
+        Health here means "what this gateway observed", not a synthetic probe: a
+        provider with no attempts is reported with zeroes and the UI says so.
+        """
+        with self.connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT a.provider,
+                       COUNT(*) AS attempts,
+                       SUM(CASE WHEN a.status = 'success' THEN 1 ELSE 0 END) AS successes,
+                       SUM(CASE WHEN a.status <> 'success' THEN 1 ELSE 0 END) AS failures,
+                       MAX(a.created_at_ms) AS last_seen_ms
+                FROM attempts a
+                JOIN requests r ON r.request_id = a.request_id
+                WHERE r.project_id = ? AND a.created_at_ms >= ?
+                GROUP BY a.provider
+                ORDER BY a.provider
+                """,
+                (project_id, since_ms),
+            ).fetchall()
+            last_errors = {
+                row["provider"]: row["error_class"]
+                for row in conn.execute(
+                    """
+                    SELECT a.provider, a.error_class
+                    FROM attempts a
+                    JOIN requests r ON r.request_id = a.request_id
+                    WHERE r.project_id = ? AND a.error_class IS NOT NULL
+                    ORDER BY a.created_at_ms
+                    """,
+                    (project_id,),
+                ).fetchall()
+            }
+        return [
+            {
+                "provider": row["provider"],
+                "attempts": row["attempts"],
+                "successes": row["successes"],
+                "failures": row["failures"],
+                "last_seen_ms": row["last_seen_ms"],
+                "last_error_class": last_errors.get(row["provider"]),
+            }
+            for row in rows
+        ]
 
     def attempts_for(self, request_id: str) -> list[AttemptRow]:
         with self.connection() as conn:
@@ -748,10 +924,15 @@ class Ledger:
             "project_id": request.project_id,
             "route_model": request.route_model,
             "status": request.status,
+            "error_code": request.error_code,
+            "outcome": (
+                "blocked" if request.status == "failed" and not attempts else request.status
+            ),
             "reserved_micros": request.reserved_micros,
             "settled_micros": request.settled_micros,
             "created_at_ms": request.created_at_ms,
             "completed_at_ms": request.completed_at_ms,
+            "audit": self.audit_for(request_id),
             "attempts": [
                 {
                     "attempt": attempt.attempt_number,

@@ -174,11 +174,52 @@ reserved amounts, so it is the amount a new request may reserve right now.
 }
 ```
 
+## `GET /v1/gateway/requests?project=<id>&limit=<n>&days=<n>`
+
+Newest-first request metadata for the dashboard ledger table: `request_id`, `route_model`,
+`status`, `reserved_usd`, `settled_usd`, `attempts`, timestamps, `error_code`, `decision`, and
+`last_provider`. `limit` is 1–500. Prompt and completion text are absent by construction,
+because the ledger never stores them.
+
 ## `GET /v1/gateway/requests/{request_id}`
 
 Returns the request row plus every attempt, with `settled_usd` and per-attempt `cost_usd`
-added. Unknown ids are `404 request_not_found`. Prompt text is never stored, so it cannot be
-returned.
+added, plus the audit trail. Unknown ids are `404 request_not_found`. Prompt text is never
+stored, so it cannot be returned.
+
+`outcome` is `settled`, `failed`, `released`, or `blocked`. `blocked` means the firewall
+refused the request before forwarding it; such a row has no attempts and always carries an
+`error_code` plus a `request_rejected` audit event, so the reason is visible in one place.
+
+## `GET /v1/gateway/whoami`
+
+No query parameters. Returns the project the presented key resolves to and the projects that
+share that credential:
+
+```json
+{"project": "alpha", "name": "Demo alpha", "readable_projects": ["alpha", "beta"]}
+```
+
+`readable_projects` is computed from the configured key digests, so a dashboard can only
+offer projects the key can actually read.
+
+## `GET /v1/gateway/policy?project=<id>`
+
+The effective policy for one project, with no credential material: budgets, model allowlist,
+rate and concurrency limits, retention, redaction mode, and the route table filtered to the
+models this project may use.
+
+## `GET /v1/gateway/providers?project=<id>&days=<n>`
+
+Observed provider outcomes in the window, one row per provider that saw traffic:
+`attempts`, `successes`, `failures`, `last_error_class`, and `last_attempt_ms`. A provider
+with no traffic has no row; these are observations, not synthetic probes.
+
+## `GET /v1/gateway/usage.csv?project=<id>&days=<n>`
+
+The usage report as one CSV row plus a header, served with
+`content-disposition: attachment; filename="usage-<project>.csv"`. Same authorization and
+window rules as the JSON report.
 
 ## `GET /healthz`
 

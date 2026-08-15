@@ -8,7 +8,8 @@ tests/unit/          pure logic, in-memory ledger, mock HTTP transports
 tests/integration/   real FastAPI app and real CLI subprocesses
 tests/conftest.py    shared config builder; the only place fixtures are defined
 scripts/smoke.py     end-to-end check against a live server on a free port
-docs/                architecture, API, operations, threat model, privacy
+scripts/backdate-history.sh / .ps1   rebuild synthetic commit history (see help)
+docs/                architecture, API, dashboard, design tokens, operations, threat model, privacy
 decisions/           ADRs for choices that are expensive to reverse
 ```
 
@@ -110,6 +111,24 @@ library may not.
   HTTP and reports p50/p95 latency.
 - Set `log_level = "DEBUG"` for metadata logging; `log_prompts = true` only for a bounded
   session, and remember the prompts land in your log sink.
+
+## Dashboard
+
+`src/cost_firewall/dashboard/` is four static files served by the gateway: `index.html`,
+`app.js` (ES module, no framework), `app.css`, and `tokens.css`. There is no build step, so
+there is nothing to compile and no generated artefact to keep in sync.
+
+- Style values come from `tokens.css` only; `docs/design-tokens.md` is the register of what
+  each token means and its measured contrast. A new colour is a change to the register.
+- Data reaches the DOM through `textContent` only. Prompt text never arrives, because the
+  ledger does not store it.
+- Every asynchronous outcome goes through `setStatus`, which writes to the reserved status
+  region. Do not add a second live region.
+- The page is served under `script-src 'self'` with no `unsafe-inline`, so no inline
+  `<script>` and no `style=` attribute. `tests/integration/test_dashboard_api.py` enforces
+  this; a CSP violation is a silent failure in the browser, so the test is the guard.
+- Accessibility and reflow gates are listed in `docs/dashboard.md`. They were run in a real
+  browser against a live server; they are not part of `pytest`.
 
 ## Offline development
 

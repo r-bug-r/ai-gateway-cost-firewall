@@ -5,6 +5,45 @@ All notable changes are recorded here. The format follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Pre-1.0, a minor version may
 change the API; every change to a documented contract is listed.
 
+## [Unreleased]
+
+### Added
+
+- Operator dashboard at `GET /dashboard/`: a budget meter with committed, reserved, and
+  remaining amounts; usage KPIs; observed provider outcomes; recent refusals; a searchable
+  and filterable request ledger with a per-request attempt trace; a routing simulator that
+  calls `POST /v1/gateway/dry-run`; a read-only policy view; and CSV/JSON export.
+- Read endpoints the dashboard consumes: `GET /v1/gateway/requests` (list),
+  `GET /v1/gateway/whoami`, `GET /v1/gateway/policy`, `GET /v1/gateway/providers`, and
+  `GET /v1/gateway/usage.csv`.
+- The dashboard is served with a strict content security policy
+  (`default-src 'none'; script-src 'self'`, no inline script or style), `nosniff`, and
+  `referrer-policy: no-referrer`. API responses are unchanged.
+- The control room renders the daily cap as its own compact meter next to the monthly one,
+  and states which cap is refusing traffic. Previously a project at 0.26% of its monthly
+  budget could refuse every request with `daily_budget_exhausted` while the page showed no
+  reason.
+- `docs/dashboard.md` (views, states, accessibility evidence, limitations) and
+  `docs/design-tokens.md` (token register with measured contrast for every pair).
+
+### Fixed
+
+- A rejected or unreachable key now clears every project panel. Previously the last
+  project's numbers stayed on screen under the new key's error message, which attributed
+  one tenant's spend to another credential.
+- An error panel's Retry button now works after a failed load; the message was previously
+  cloned per panel, which copied the markup but not the click listener.
+- Simulator validation no longer references an out-of-scope variable, so an empty model or
+  a zero token count is reported on the field instead of failing silently.
+- Controls are 44px high, matching the touch-target minimum; the skip link, text fields, and
+  selects were 40-41px.
+- Wide tables scroll in a focusable, named region, so keyboard users can reach columns that
+  overflow at narrow widths; the tab stop exists only while the table actually overflows.
+- Arrow-key navigation on the tab strip scrolls the selected tab into view on narrow screens.
+- Budget meter fills no longer render at zero width. The dashboard ships `style-src 'self'`,
+  which discards inline style *attributes*; dynamically sized bars are now applied through
+  the CSSOM, and the decision path legend uses a class instead of an inline declaration.
+
 ## [0.1.0] - 2026-10-20
 
 First working release. Scope: local-first gateway, deterministic fake providers, SQLite

@@ -1,0 +1,70 @@
+/*
+ * Token register: docs/design-tokens.md records the measured contrast ratio for
+ * every pair used below. Do not add a colour, space, or radius that is not
+ * registered here — the dashboard has no other source of styling values.
+ */
+
+:root {
+  color-scheme: light dark;
+
+  --color-canvas: #f5f3ee;
+  --color-surface: #fffdf8;
+  --color-surface-raised: #ffffff;
+  --color-ink: #20221f;
+  --color-ink-muted: #646860;
+  --color-border: #d6d2c8;
+  --color-border-strong: #7c8079;
+  --color-accent: #b6422b;
+  --color-accent-ink: #fffaf2;
+  --color-success: #356b4b;
+  --color-warning: #8c641e;
+  --color-danger: #a72f2f;
+
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-6: 1.5rem;
+  --space-8: 2rem;
+  --space-12: 3rem;
+
+  --radius-control: 0.25rem;
+  --radius-panel: 0.5rem;
+  --focus-ring: 0 0 0 3px var(--color-canvas), 0 0 0 5px var(--color-accent);
+  --motion-fast: 150ms;
+  --motion-standard: 220ms;
+
+  --text-xs: 0.75rem;
+  --text-sm: 0.8125rem;
+  --text-base: 0.9375rem;
+  --text-lg: 1.125rem;
+  --text-xl: 1.5rem;
+  --text-2xl: 2rem;
+
+  --font-ui: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+  --font-data: ui-monospace, SFMono-Regular, "Cascadia Mono", Menlo, Consolas, monospace;
+  --font-display: ui-serif, Georgia, "Times New Roman", serif;
+
+  --line: 1px solid var(--color-border);
+  --line-strong: 1px solid var(--color-border-strong);
+  --shell-header-height: 3.5rem;
+  --status-height: 3rem;
+  --measure: 78rem;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-canvas: #17150f;
+    --color-surface: #1e1c15;
+    --color-surface-raised: #262319;
+    --color-ink: #f2efe4;
+    --color-ink-muted: #a9a596;
+    --color-border: #3a372c;
+    --color-border-strong: #7a7666;
+    --color-accent: #e57a5e;
+    --color-accent-ink: #1a1712;
+    --color-success: #7fbf93;
+    --color-warning: #d9a44a;
+    --color-danger: #e78d84;
+  }
+}

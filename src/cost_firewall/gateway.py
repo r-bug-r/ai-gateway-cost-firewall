@@ -220,9 +220,18 @@ class Gateway:
         request = self._parse(payload)
         self._log_request(project, request)
         plan = self.plan(project, request)
+        # Allocated before any policy gate so a refusal is a recordable outcome, not
+        # just a log line. Rejected requests never reserve budget.
+        request_id = f"req_{uuid.uuid4().hex[:24]}"
 
         if plan.reservation_micros > project.per_request_max_micros:
-            self._reject(project, request, "per_request_limit_exceeded")
+            self._reject(
+                project,
+                request,
+                "per_request_limit_exceeded",
+                request_id=request_id,
+                route_model=plan.route_model,
+            )
             raise PerRequestLimitExceeded(
                 "Estimated maximum cost "
                 f"{format_usd(plan.reservation_micros)} exceeds the per-request limit "
@@ -233,7 +242,13 @@ class Gateway:
 
         retry_after = self._rate_limiters[project.id].acquire(project.id)
         if retry_after is not None:
-            self._reject(project, request, "rate_limited")
+            self._reject(
+                project,
+                request,
+                "rate_limited",
+                request_id=request_id,
+                route_model=plan.route_model,
+            )
             raise RateLimited(
                 f"Rate limit of {project.requests_per_minute} requests/minute exceeded. "
                 f"Retry in {retry_after}s.",
@@ -241,7 +256,13 @@ class Gateway:
             )
 
         if not self._concurrency.try_acquire(project.id):
-            self._reject(project, request, "concurrency_limit")
+            self._reject(
+                project,
+                request,
+                "concurrency_limit",
+                request_id=request_id,
+                route_model=plan.route_model,
+            )
             raise ConcurrencyLimited(
                 f"Concurrency limit of {project.max_concurrency} in-flight requests exceeded "
                 "for this project."
@@ -250,7 +271,7 @@ class Gateway:
         context = _Context(
             project=project,
             request=request,
-            request_id=f"req_{uuid.uuid4().hex[:24]}",
+            request_id=request_id,
             plan=plan,
             reserved=False,
         )
@@ -308,7 +329,13 @@ class Gateway:
             self.metrics.inc(
                 "gateway_reservations_total", (context.project.id, f"denied_{denied.reason}")
             )
-            self._reject(context.project, context.request, denied.reason)
+            self._reject(
+                context.project,
+                context.request,
+                denied.reason,
+                request_id=context.request_id,
+                route_model=context.plan.route_model,
+            )
             raise BudgetExhausted(
                 f"Budget exhausted ({denied.reason}). "
                 f"Remaining this month: {format_usd(denied.snapshot.month_remaining_micros)}; "
@@ -317,7 +344,13 @@ class Gateway:
             ) from denied
         except BudgetUnavailable as exc:
             if self.config.server.fail_closed:
-                self._reject(context.project, context.request, "budget_state_unavailable")
+                self._reject(
+                    context.project,
+                    context.request,
+                    "budget_state_unavailable",
+                    request_id=context.request_id,
+                    route_model=context.plan.route_model,
+                )
                 raise BudgetStateUnavailable(
                     "Budget state is unavailable and the gateway is configured to fail closed. "
                     "Request not forwarded."
@@ -335,7 +368,15 @@ class Gateway:
         request = context.request
         forward_request = request
         if self.config.redaction.redact_before_forward:
-            forward_request = _redacted_request(request, self.redactor)
+            forward_request, counts = _redacted_request(request, self.redactor)
+            if counts:
+                detail = ", ".join(f"{name}={count}" for name, count in sorted(counts.items()))
+                self.ledger.audit(
+                    event="redaction_applied",
+                    detail=f"{sum(counts.values())} match(es) before forwarding: {detail}",
+                    project_id=project.id,
+                    request_id=context.request_id,
+                )
 
         last_error: ProviderError | None = None
         for index, target in enumerate(context.plan.targets):
@@ -555,11 +596,33 @@ class Gateway:
             ),
         }
 
-    def _reject(self, project: ProjectConfig, request: ChatRequest, reason: str) -> None:
+    def _reject(
+        self,
+        project: ProjectConfig,
+        request: ChatRequest,
+        reason: str,
+        *,
+        request_id: str | None = None,
+        route_model: str | None = None,
+    ) -> None:
         self.metrics.inc("gateway_rejections_total", (reason,))
         self.metrics.inc(
             "gateway_requests_total", (project.id, request.model, f"rejected_{reason}")
         )
+        if request_id is None:
+            return
+        # A refusal is an outcome worth keeping: it is how an operator sees that the
+        # firewall did its job. Recording it must never convert a clean 429/402 into a
+        # 500, so a ledger failure here is logged and dropped.
+        try:
+            self.ledger.record_rejection(
+                project_id=project.id,
+                request_id=request_id,
+                route_model=route_model or request.model,
+                reason=reason,
+            )
+        except Exception:  # pragma: no cover - defensive
+            logger.warning("Could not record rejection for %s", request_id, exc_info=True)
 
     # -------------------------------------------------------------- reporting
 
@@ -587,18 +650,80 @@ class Gateway:
         ]
         return trace
 
+    def recent_requests(
+        self, project: ProjectConfig, *, limit: int = 50, since_ms: int | None = None
+    ) -> dict[str, Any]:
+        rows = self.ledger.recent_requests(project_id=project.id, limit=limit, since_ms=since_ms)
+        for row in rows:
+            row["settled_usd"] = format_usd(row["settled_micros"])
+            row["reserved_usd"] = format_usd(row["reserved_micros"])
+        return {"project": project.id, "requests": rows}
 
-def _redacted_request(request: ChatRequest, redactor: Redactor) -> ChatRequest:
-    messages = tuple(
-        Message(role=message.role, content=redactor.redact(message.content).text)
-        for message in request.messages
-    )
-    return ChatRequest(
-        model=request.model,
-        messages=messages,
-        max_tokens=request.max_tokens,
-        temperature=request.temperature,
-        idempotent=request.idempotent,
+    def policy_view(self, project: ProjectConfig) -> dict[str, Any]:
+        """The effective policy for one project, without credential material."""
+        routes = []
+        for route in self.config.routes:
+            if project.allowed_models and route.model not in project.allowed_models:
+                continue
+            routes.append(
+                {
+                    "model": route.model,
+                    "targets": [
+                        {
+                            "provider": target.provider,
+                            "model": target.model,
+                            "input_usd_per_million": str(target.input_usd_per_1m),
+                            "output_usd_per_million": str(target.output_usd_per_1m),
+                        }
+                        for target in route.targets
+                    ],
+                }
+            )
+        return {
+            "project": project.id,
+            "name": project.name,
+            "monthly_budget_micros": project.monthly_budget_micros,
+            "monthly_budget_usd": format_usd(project.monthly_budget_micros),
+            "daily_budget_usd": (
+                format_usd(project.daily_budget_micros)
+                if project.daily_budget_micros is not None
+                else None
+            ),
+            "per_request_max_usd": format_usd(project.per_request_max_micros),
+            "requests_per_minute": project.requests_per_minute,
+            "max_concurrency": project.max_concurrency,
+            "retention_days": project.retention_days,
+            "allowed_models": list(project.allowed_models),
+            "redact_before_forward": self.config.redaction.redact_before_forward,
+            "redaction_patterns": [pattern.name for pattern in self.config.redaction.patterns],
+            "routes": routes,
+        }
+
+
+def _redacted_request(
+    request: ChatRequest, redactor: Redactor
+) -> tuple[ChatRequest, dict[str, int]]:
+    """Redact every message and report per-pattern match counts.
+
+    Counts, not content: the audit trail records that something was scrubbed and
+    which pattern caught it, never the value that matched.
+    """
+    counts: dict[str, int] = {}
+    messages = []
+    for message in request.messages:
+        result = redactor.redact(message.content)
+        for name, count in result.counts.items():
+            counts[name] = counts.get(name, 0) + count
+        messages.append(Message(role=message.role, content=result.text))
+    return (
+        ChatRequest(
+            model=request.model,
+            messages=tuple(messages),
+            max_tokens=request.max_tokens,
+            temperature=request.temperature,
+            idempotent=request.idempotent,
+        ),
+        counts,
     )
 
 

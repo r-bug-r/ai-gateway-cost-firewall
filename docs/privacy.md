@@ -20,6 +20,12 @@
   latency only.
 - **Request headers.** Except `Authorization`, which is hashed and discarded.
 
+The dashboard at `/dashboard/` is a browser client of these same endpoints, so it inherits
+every rule above. The project key an operator pastes is held in that tab's `sessionStorage`
+and is lost when the tab closes; it is never placed in a URL, a cookie, or a server-side
+session. The page is served under a content security policy that forbids inline and
+third-party script, so injected code cannot read the key from memory.
+
 ## Logs
 
 At `log_level = INFO` the gateway logs one line per HTTP request:

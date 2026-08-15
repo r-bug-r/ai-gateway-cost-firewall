@@ -183,3 +183,41 @@ Use forms with plain labels, unit suffixes, validation, and a test policy action
 - Measure narrow overflow and screenshot the budget meter at 390px.
 
 ---
+
+---
+
+## Status (this repository)
+
+Implemented in `src/cost_firewall/dashboard/` and served by the gateway at `GET /dashboard/`.
+Decisions are recorded in `decisions/0007-dashboard-local-readonly.md` and
+`decisions/0008-daily-cap-in-meter.md`; the view-by-view description, states, and the
+accessibility evidence table live in `docs/dashboard.md`, and the token register with measured
+contrast in `docs/design-tokens.md`.
+
+| Plan item | Where | Verified by |
+| --- | --- | --- |
+| 1.5 axe-core, all views | `app.css`, `index.html` | axe-core 4.10.2, 0 violations at 390px and 1440px |
+| 1.5 tab order, visible focus, dialog focus | `app.js` | Chromium: order, rings, Escape, focus restore to the originating row |
+| 1.5 contrast 4.5:1 / 3:1 | tokens | every pair measured in `docs/design-tokens.md` |
+| 1.5 44px touch targets | tokens | measured on every control, skip link included |
+| 1.5 `aria-live` status, reserved height | `index.html` | `role="status"`, `aria-live="polite"`, `aria-atomic`, fixed block height |
+| 1.5 200% zoom / text-only reflow at 320px | `app.css` | 0px overflow on all six views |
+| 1.5 overflow at 390/768/1024/1440 (+320) | `app.css` | `scrollWidth - clientWidth === 0` at all five widths |
+| 1.5 breakpoint screenshots | `.tmp-smoke/*.png` | inspected at 320/390/768/1024/1440, over-budget, empty ledger, large values |
+| A. Control room | `renderControl` | monthly + daily meters, reservation split, provider outcomes, recent blocks |
+| B. Request detail | `openRequest` | route, attempts, costs, tokens, latency, error class, redaction outcome |
+| C. Routing simulator | `renderSimulator` | `POST /v1/gateway/dry-run`; allow/block, targets, reservation, reasons |
+| D. Budget and policy | `renderPolicy` | read-only caps, allowlist, limits, retention, redaction mode |
+
+Deliberate deviations, with reasons:
+
+- **No prompt reveal (plan item B).** The ledger stores no prompt or completion text, so there
+  is nothing to reveal and no "local-only reveal setting" that could leak. The request table
+  says so in its caption. This is stricter than the plan and is a product constraint, not an
+  unfinished feature.
+- **Policy is read-only (plan item D).** A write path needs a write credential, a policy audit
+  event, and a rule for "new cap is below reserved spend" — see ADR 0007. The simulator
+  provides the plan's "test policy action" without persisting anything.
+- **Provider health is observed, not probed.** A provider with no traffic has no row; a failing
+  provider shows its failure count and last error class. Probing would add network calls the
+  $0 offline mode forbids.

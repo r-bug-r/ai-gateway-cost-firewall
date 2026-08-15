@@ -424,6 +424,10 @@ Dates are actual. See `decisions/0006-phase-a-exit.md` for the full Phase A evid
 | 2026-10-20 | A | Container definition, CLI reports | done (image not built locally: no Docker) |
 | 2026-10-20 | A | Concurrent load test, documented results | done |
 | 2026-10-20 | A | Verification: 123 tests, lint, format, mypy, smoke, fresh clone | done |
+| 2026-10-20 | B | Dashboard shell, six views, tokens, all states | done |
+| 2026-10-21 | B | Daily cap rendered as its own meter; binding-cap sentence | done |
+| 2026-10-21 | B | Fix zero-width meter fills under `style-src 'self'` | done |
+| 2026-10-21 | B | Verification: 139 tests, axe 0 violations at 390/1440, overflow 320-1440, keyboard, reduced motion | done |
 
 Not yet evidenced: 100 installations, 10 public deployments, 3 contributor-maintained
 adapters, any user report. Those are traction metrics, not implementation items, and nothing

@@ -2,18 +2,23 @@
 
 from __future__ import annotations
 
+import csv
+import io
 import json
 import logging
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
+from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, Request
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import JSONResponse, PlainTextResponse, Response
+from fastapi.responses import JSONResponse, PlainTextResponse, RedirectResponse, Response
+from fastapi.staticfiles import StaticFiles
 
 from cost_firewall.config import Config
 from cost_firewall.errors import (
+    Forbidden,
     GatewayError,
     PayloadTooLarge,
     UpstreamTimeout,
@@ -25,6 +30,28 @@ from cost_firewall.ledger import now_ms, utc_month_start_ms
 logger = logging.getLogger("cost_firewall.http")
 
 _MAX_REPORT_WINDOW_DAYS = 366
+_MAX_REQUEST_PAGE = 200
+_DASHBOARD_DIR = Path(__file__).with_name("dashboard")
+
+# CSV export is built from the same aggregated report the JSON endpoint returns,
+# so the two cannot disagree. One row per metric keeps the file readable in a
+# spreadsheet without inventing a schema that the ledger does not support.
+_CSV_FIELDS = (
+    "project_id",
+    "since_ms",
+    "requests",
+    "settled_requests",
+    "failed_requests",
+    "released_requests",
+    "attempts",
+    "successful_attempts",
+    "settled_micros",
+    "settled_usd",
+    "input_tokens",
+    "output_tokens",
+    "avg_latency_ms",
+    "reconciled",
+)
 
 
 class BodyReader:
@@ -94,6 +121,30 @@ def create_app(config: Config, gateway: Gateway) -> FastAPI:
             response.status_code,
             latency_ms,
         )
+        return response
+
+    @app.middleware("http")
+    async def dashboard_security_headers(
+        request: Request, call_next: Callable[[Request], Awaitable[Response]]
+    ) -> Response:
+        """Lock down the operator UI without touching the API surface.
+
+        The dashboard loads only same-origin files and calls only same-origin
+        endpoints, so it can run under a policy that forbids everything else. That
+        matters because the page holds a project key in memory: injected script
+        would be able to read it. The API paths keep their existing headers so
+        non-browser clients are unaffected.
+        """
+        response = await call_next(request)
+        if request.url.path == "/dashboard" or request.url.path.startswith("/dashboard/"):
+            response.headers.setdefault(
+                "content-security-policy",
+                "default-src 'none'; script-src 'self'; style-src 'self'; "
+                "img-src 'self' data:; connect-src 'self'; base-uri 'none'; "
+                "form-action 'none'; frame-ancestors 'none'",
+            )
+            response.headers.setdefault("x-content-type-options", "nosniff")
+            response.headers.setdefault("referrer-policy", "no-referrer")
         return response
 
     @app.exception_handler(GatewayError)
@@ -166,6 +217,100 @@ def create_app(config: Config, gateway: Gateway) -> FastAPI:
         selected = _authorize_report(gateway, request.headers.get("authorization"), project)
         return JSONResponse(status_code=200, content=gateway.budget_report(selected))
 
+    @app.get("/v1/gateway/requests")
+    async def requests_list(
+        request: Request,
+        project: str | None = None,
+        limit: int = 50,
+        days: int | None = None,
+    ) -> Response:
+        selected = _authorize_report(gateway, request.headers.get("authorization"), project)
+        if limit < 1 or limit > _MAX_REQUEST_PAGE:
+            raise ValidationError(
+                f"'limit' must be between 1 and {_MAX_REQUEST_PAGE}.", param="limit"
+            )
+        since_ms = None
+        if days is not None:
+            if days < 1 or days > _MAX_REPORT_WINDOW_DAYS:
+                raise ValidationError(
+                    f"'days' must be between 1 and {_MAX_REPORT_WINDOW_DAYS}.", param="days"
+                )
+            since_ms = now_ms() - days * 86_400_000
+        body = await run_in_threadpool(
+            gateway.recent_requests, selected, limit=limit, since_ms=since_ms
+        )
+        return JSONResponse(status_code=200, content=body)
+
+    @app.get("/v1/gateway/whoami")
+    async def whoami(request: Request) -> Response:
+        """Which project this key resolves to, and which projects it may read.
+
+        The dashboard uses this to populate its project selector: the list is the
+        set of projects sharing a credential with the presented key, so the UI can
+        never offer a project the key cannot read.
+        """
+        project = gateway.authenticator.resolve(request.headers.get("authorization"))
+        readable = [
+            candidate.id
+            for candidate in config.projects
+            if set(candidate.api_key_hashes) & set(project.api_key_hashes)
+        ]
+        return JSONResponse(
+            status_code=200,
+            content={
+                "project": project.id,
+                "name": project.name,
+                "readable_projects": readable,
+            },
+        )
+
+    @app.get("/v1/gateway/policy")
+    async def policy(request: Request, project: str | None = None) -> Response:
+        selected = _authorize_report(gateway, request.headers.get("authorization"), project)
+        return JSONResponse(status_code=200, content=gateway.policy_view(selected))
+
+    @app.get("/v1/gateway/providers")
+    async def providers(request: Request, project: str | None = None, days: int = 7) -> Response:
+        selected = _authorize_report(gateway, request.headers.get("authorization"), project)
+        if days < 1 or days > _MAX_REPORT_WINDOW_DAYS:
+            raise ValidationError(
+                f"'days' must be between 1 and {_MAX_REPORT_WINDOW_DAYS}.", param="days"
+            )
+        since_ms = now_ms() - days * 86_400_000
+        rows = await run_in_threadpool(
+            gateway.ledger.provider_health, project_id=selected.id, since_ms=since_ms
+        )
+        return JSONResponse(
+            status_code=200,
+            content={"project": selected.id, "window_days": days, "providers": rows},
+        )
+
+    @app.get("/v1/gateway/usage.csv", response_class=PlainTextResponse)
+    async def usage_csv(
+        request: Request, project: str | None = None, days: int | None = None
+    ) -> Response:
+        selected = _authorize_report(gateway, request.headers.get("authorization"), project)
+        since_ms = None
+        if days is not None:
+            if days < 1 or days > _MAX_REPORT_WINDOW_DAYS:
+                raise ValidationError(
+                    f"'days' must be between 1 and {_MAX_REPORT_WINDOW_DAYS}.", param="days"
+                )
+            since_ms = now_ms() - days * 86_400_000
+        report = await run_in_threadpool(gateway.usage, selected, since_ms=since_ms)
+        buffer = io.StringIO()
+        writer = csv.DictWriter(buffer, fieldnames=_CSV_FIELDS, extrasaction="ignore")
+        writer.writeheader()
+        writer.writerow(report)
+        return PlainTextResponse(
+            status_code=200,
+            content=buffer.getvalue(),
+            headers={
+                "content-type": "text/csv; charset=utf-8",
+                "content-disposition": (f'attachment; filename="usage-{selected.id}.csv"'),
+            },
+        )
+
     @app.get("/v1/gateway/requests/{request_id}")
     async def request_trace(request_id: str, request: Request) -> Response:
         selected = _authorize_report(gateway, request.headers.get("authorization"), None)
@@ -200,6 +345,20 @@ def create_app(config: Config, gateway: Gateway) -> FastAPI:
             },
         )
 
+    @app.get("/dashboard")
+    async def dashboard_root() -> Response:
+        # Relative asset paths require the trailing slash.
+        return RedirectResponse(url="/dashboard/", status_code=307)
+
+    # The dashboard shell is static and contains no data. Every number it shows is
+    # fetched with the operator's key, so serving the HTML needs no credential.
+    if _DASHBOARD_DIR.is_dir():
+        app.mount(
+            "/dashboard",
+            StaticFiles(directory=_DASHBOARD_DIR, html=True),
+            name="dashboard",
+        )
+
     return app
 
 
@@ -218,7 +377,11 @@ def _authorize_report(gateway: Gateway, authorization: str | None, project_id: s
     for candidate in target.api_key_hashes:
         if candidate in project.api_key_hashes:
             return target
-    raise GatewayError("This API key cannot read another project's usage.", param="project")
+    raise Forbidden(
+        "This API key cannot read another project's usage. "
+        "Present a key belonging to that project.",
+        param="project",
+    )
 
 
 def month_window_start() -> int:

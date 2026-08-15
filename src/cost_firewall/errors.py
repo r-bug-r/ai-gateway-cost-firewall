@@ -66,6 +66,14 @@ class AuthError(GatewayError):
     code = "invalid_api_key"
 
 
+class Forbidden(GatewayError):
+    """The credential is valid but does not cover the resource requested."""
+
+    status_code = 403
+    error_type = "permission_error"
+    code = "forbidden"
+
+
 class ModelNotFound(GatewayError):
     status_code = 404
     error_type = "invalid_request_error"
