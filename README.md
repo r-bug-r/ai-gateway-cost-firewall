@@ -1,7 +1,15 @@
 # AI Gateway Cost Firewall
 
-A small, self-hostable OpenAI-compatible gateway that makes model spending and provider
-failure explicit **before** they become incidents.
+[![ci](https://github.com/r-bug-r/ai-gateway-cost-firewall/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/r-bug-r/ai-gateway-cost-firewall/actions/workflows/ci.yml)
+[![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![python 3.12](https://img.shields.io/badge/python-3.12-3776ab.svg)](pyproject.toml)
+
+**A self-hostable, OpenAI-compatible gateway that refuses the request before it can
+overspend.** It reserves each request's worst-case cost in SQLite, forwards only if the
+reservation fits the budget, settles at the provider-reported usage, and records every
+attempt and refusal.
+
+![The control room: committed and reserved spend against the monthly and daily caps, with the remaining headroom and the binding limit called out.](docs/assets/control-room.png)
 
 It sits between your application and one or more model providers and does four things:
 
@@ -18,7 +26,27 @@ no network, no spend: the whole budget and routing path is testable offline.
 > Cost figures are **estimates** derived from a configured price table and provider-reported
 > token counts. They are not invoices. See [docs/operations.md](docs/operations.md).
 
-## Status
+Pre-1.0: every documented contract is covered by tests and listed in
+[CHANGELOG.md](CHANGELOG.md); a minor version may change the API.
+
+## How a request moves
+
+```mermaid
+flowchart LR
+  A[Application] --> B[Auth and limits]
+  B --> C{Budget gate}
+  C -- denied --> D[429 budget_exhausted<br/>no provider call]
+  C -- allowed --> E[Route selection]
+  E --> F[Provider attempt]
+  F --> G[Settle or release]
+  G --> H[(SQLite ledger)]
+  H --> I[Dashboard, trace, metrics]
+```
+
+The gate is the only path to a provider. A request that cannot reserve its worst-case cost
+never leaves the process.
+
+## Capabilities and limits
 
 | Area | State |
 | --- | --- |
@@ -28,6 +56,7 @@ no network, no spend: the whole budget and routing path is testable offline.
 | Limits | per-project sliding-window rate limit and in-flight concurrency cap |
 | Redaction | always on logs; opt-in for forwarded prompts |
 | Evidence | SQLite ledger, Prometheus metrics, JSON reports, per-request trace |
+| Operator UI | local dashboard at `/dashboard/`: budget meter, ledger, routing simulator, exports |
 | Deployment | local process or container; single writer database |
 | Streaming | **not supported** (`stream: true` is a 400) |
 
@@ -87,7 +116,7 @@ Inspect the same request from the ledger:
 - metrics expose request/attempt/token/cost/rejection counters;
 - auth, model allowlist, and streaming rejection return documented errors.
 
-## How budget enforcement works
+## How the budget gate works
 
 Every request reserves a **worst-case** amount before forwarding:
 
@@ -112,7 +141,7 @@ Consequences worth knowing:
 - `cost-firewall purge` refuses to delete rows inside the current budget window unless
   `--force` is passed: deleting them would silently hand the budget back.
 
-## Fallback rules
+## Routing and fallback
 
 Fallback happens only when **all** of these hold:
 
@@ -125,6 +154,33 @@ Fallback happens only when **all** of these hold:
 `4xx` (other than `408`/`429`) and malformed upstream bodies are **permanent**: the request
 fails with `502 upstream_error` and no other provider is tried. Set `"idempotent": false` to
 guarantee no retry even for transient failures.
+
+## Dashboard
+
+The gateway serves a local operator console at `http://127.0.0.1:8787/dashboard/`. It is
+plain HTML, CSS, and ES modules served by the same process: no build step, no CDN, no
+second service. Paste a project key to read its budget, ledger, provider outcomes, policy,
+and exports.
+
+![The request ledger: metadata only, with settled cost and attempt count per request. Message content is never stored.](docs/assets/requests.png)
+
+- **Control room** — committed spend, live reservations, remaining headroom against the
+  monthly and daily caps, provider outcomes, recent refusals.
+- **Requests** — the ledger, filterable by text and outcome; open a row for every attempt,
+  its cost, latency, and the audit trail.
+- **Routing simulator** — `POST /v1/gateway/dry-run`: shows the chosen provider, estimated
+  cost, and the reservation, without reserving or calling anything.
+- **Budgets and policy** — the effective caps, allowlist, limits, redaction mode, and route
+  order. Read-only: configuration stays in the TOML file.
+- **Reports** — CSV or JSON export of the usage report for a chosen window.
+
+The key lives in that tab's `sessionStorage` and is sent as a bearer token to this origin
+only. The page is served under a strict content security policy (`script-src 'self'`, no
+inline script or style) because it holds a key in memory. Prompt text never reaches the
+browser, because the ledger never stores it.
+
+Details, accessibility evidence, and limitations: [docs/dashboard.md](docs/dashboard.md);
+colour and contrast register: [docs/design-tokens.md](docs/design-tokens.md).
 
 ## API
 
@@ -187,7 +243,9 @@ Every key is documented in [docs/operations.md](docs/operations.md).
 
 ## What this is not
 
-- Not an observability platform: no tracing UI, no dashboards, no long-term storage.
+- Not an observability platform: the dashboard reads this gateway's own ledger and nothing
+  else. No traces, no spans, no retention beyond the configured purge window, and no prompt
+  or completion text is ever stored, so none can be shown.
 - Not a prompt transformer: redaction is pattern-based and lossy; it is a safety net, not a
   guarantee. See [docs/threat-model.md](docs/threat-model.md).
 - Not a multi-writer service: SQLite is the source of truth and the budget gate assumes one
@@ -206,6 +264,11 @@ Every key is documented in [docs/operations.md](docs/operations.md).
 
 See [docs/development.md](docs/development.md) for layout and conventions, and
 [decisions/](decisions/) for the reasoning behind the non-obvious choices.
+
+## Contributing
+
+Issues and pull requests are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) and
+[CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) first. Security reports: [SECURITY.md](SECURITY.md).
 
 ## License
 

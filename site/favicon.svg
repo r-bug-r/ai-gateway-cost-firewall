@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Cost firewall">
+  <rect width="64" height="64" rx="6" fill="#17150f" />
+  <rect x="8.5" y="8.5" width="47" height="47" fill="none" stroke="#e57a5e" stroke-width="2" />
+  <text
+    x="32"
+    y="41"
+    text-anchor="middle"
+    font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+    font-size="20"
+    font-weight="700"
+    fill="#f2efe4"
+  >CF</text>
+</svg>

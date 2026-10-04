@@ -1,0 +1,348 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AI Gateway Cost Firewall — enforce the budget before the provider call</title>
+    <meta
+      name="description"
+      content="A self-hostable, OpenAI-compatible gateway that reserves each request's worst-case cost in SQLite, settles at reported usage, and refuses the request that would cross the cap."
+    />
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="AI Gateway Cost Firewall" />
+    <meta
+      property="og:description"
+      content="An OpenAI-compatible gateway with a hard budget gate in front of every provider call. Self-hosted, MIT, one SQLite file."
+    />
+    <meta
+      property="og:image"
+      content="https://r-bug-r.github.io/ai-gateway-cost-firewall/assets/control-room.png"
+    />
+    <meta name="twitter:card" content="summary_large_image" />
+    <link rel="icon" href="favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to main content</a>
+
+    <header class="site-header">
+      <div class="wrap site-header__inner">
+        <a class="brand" href="./">
+          <span class="brand__mark" aria-hidden="true">CF</span>
+          <span class="brand__name">Cost firewall</span>
+        </a>
+        <nav class="site-nav" aria-label="Primary">
+          <a href="#how">How it works</a>
+          <a href="#features">Features</a>
+          <a href="#start">Quickstart</a>
+          <a
+            class="btn btn--small"
+            href="https://github.com/r-bug-r/ai-gateway-cost-firewall"
+            rel="noreferrer"
+            >GitHub</a
+          >
+        </nav>
+      </div>
+    </header>
+
+    <main id="main">
+      <section class="hero">
+        <div class="wrap">
+          <p class="eyebrow">OpenAI-compatible · Self-hosted · MIT</p>
+          <h1>The budget gate in front of your model providers.</h1>
+          <p class="lede">
+            An OpenAI-compatible gateway that reserves each request's worst-case cost in
+            SQLite before forwarding, settles at the provider-reported usage, and refuses
+            the request that would cross the line.
+          </p>
+          <div class="actions">
+            <a
+              class="btn btn--primary"
+              href="https://github.com/r-bug-r/ai-gateway-cost-firewall#quickstart-zero-cost-no-network"
+              rel="noreferrer"
+              >Run it locally</a
+            >
+            <a
+              class="btn"
+              href="https://github.com/r-bug-r/ai-gateway-cost-firewall#how-the-budget-gate-works"
+              rel="noreferrer"
+              >How the gate works</a
+            >
+          </div>
+          <p class="hero__note">
+            No account, no SDK, no spend: the default config runs on deterministic fake
+            providers.
+          </p>
+        </div>
+      </section>
+
+      <div class="wrap">
+        <figure class="shot">
+          <img
+            src="assets/control-room.png"
+            width="1424"
+            height="805"
+            alt="The control room dashboard: $0.001399 of a $0.0100 monthly budget committed, a $0.005000 daily budget, settled and reserved amounts, and remaining headroom against both caps."
+          />
+          <figcaption>
+            Control room: committed spend, live reservations, and which cap is refusing
+            traffic. Demo data from the shipped fake providers.
+          </figcaption>
+        </figure>
+      </div>
+
+      <section class="section" id="how">
+        <div class="wrap">
+          <p class="eyebrow">One request, four commitments</p>
+          <h2>The gate is the only path to a provider.</h2>
+          <p class="section__intro">
+            Every chat completion passes the same sequence. A request that cannot reserve
+            its worst-case cost never leaves the process.
+          </p>
+          <ol class="steps">
+            <li>
+              <span class="step-label">01 — AUTHENTICATE</span>
+              <h3>Resolve the tenant</h3>
+              <p>
+                A bearer key maps to one project: its allowlist, rate limit, concurrency
+                cap, and budget policy.
+              </p>
+            </li>
+            <li>
+              <span class="step-label">02 — RESERVE</span>
+              <h3>Check the worst case</h3>
+              <p>
+                Input tokens plus <code>max_tokens</code> priced at the route's rates, then
+                checked against the per-request, daily, and monthly limits inside one
+                <code>BEGIN IMMEDIATE</code> transaction.
+              </p>
+            </li>
+            <li>
+              <span class="step-label">03 — ROUTE</span>
+              <h3>Forward once, fall back carefully</h3>
+              <p>
+                Ordered targets are tried only for idempotent requests whose failure is
+                classified transient. A permanent <code>4xx</code> stops at the first
+                attempt.
+              </p>
+            </li>
+            <li>
+              <span class="step-label">04 — SETTLE</span>
+              <h3>Replace the estimate with the bill</h3>
+              <p>
+                The reservation settles at reported usage, or at zero when the provider
+                failed. Every attempt keeps its tokens, latency, cost, and outcome.
+              </p>
+            </li>
+          </ol>
+        </div>
+      </section>
+
+      <section class="section" id="features">
+        <div class="wrap">
+          <p class="eyebrow">What you get</p>
+          <h2>Spend control with receipts.</h2>
+          <div class="cards">
+            <article class="card">
+              <h3>Atomic by construction</h3>
+              <p>
+                One writer, one transaction. Two processes cannot both observe the same
+                headroom, and a refusal creates no attempt row.
+              </p>
+            </article>
+            <article class="card">
+              <h3>Two horizons, one gate</h3>
+              <p>
+                Per-request ceilings, a daily cap, and a monthly cap. The dashboard names
+                the cap that is currently refusing traffic.
+              </p>
+            </article>
+            <article class="card">
+              <h3>Classified fallback</h3>
+              <p>
+                Connection errors, timeouts, <code>408</code>, <code>429</code>, and
+                <code>5xx</code> can move to the next target. Malformed bodies and other
+                <code>4xx</code> do not.
+              </p>
+            </article>
+            <article class="card">
+              <h3>Redaction by default</h3>
+              <p>
+                Secret-shaped strings never reach the log. Redacting prompts before
+                forwarding is opt-in, because it changes what the model sees.
+              </p>
+            </article>
+            <article class="card">
+              <h3>Evidence, not a guess</h3>
+              <p>
+                SQLite ledger, per-request trace, Prometheus metrics, and CSV or JSON
+                exports. Costs are estimates; the arithmetic is auditable.
+              </p>
+            </article>
+            <article class="card">
+              <h3>A local operator console</h3>
+              <p>
+                Budget meter, request ledger, routing simulator, and read-only policy.
+                Served by the gateway itself: no build step, no second service.
+              </p>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section class="section">
+        <div class="wrap split">
+          <div>
+            <p class="eyebrow">Tradeoffs, stated</p>
+            <h2>Deliberately boring infrastructure.</h2>
+            <p class="section__intro">
+              The safety property should be easy to audit. There is no queue, no cache, no
+              sidecar, and no build pipeline between the budget check and the provider
+              call.
+            </p>
+            <p>
+              <a
+                href="https://github.com/r-bug-r/ai-gateway-cost-firewall/tree/main/decisions"
+                rel="noreferrer"
+                >Read the architecture decisions →</a
+              >
+            </p>
+          </div>
+          <ul class="plain-list">
+            <li>
+              <strong>One process, one writer.</strong> Budget correctness rests on SQLite's
+              <code>BEGIN IMMEDIATE</code>, not on coordination between services.
+            </li>
+            <li>
+              <strong>No network by default.</strong> The shipped config terminates at
+              deterministic fake providers, so the whole path is testable offline.
+            </li>
+            <li>
+              <strong>No prompt storage.</strong> The ledger keeps identifiers, tokens,
+              cost, and outcome. Message content is never written.
+            </li>
+            <li>
+              <strong>No silent streaming.</strong> <code>stream: true</code> is a
+              documented <code>400</code>, not a request that quietly buffers.
+            </li>
+            <li>
+              <strong>No hidden spend.</strong> Rejected requests create no attempt rows,
+              and settled spend can never exceed the reservation.
+            </li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="section" id="start">
+        <div class="wrap split">
+          <div>
+            <p class="eyebrow">Quickstart</p>
+            <h2>Run it locally.</h2>
+            <p class="section__intro">
+              Python 3.12. No provider credentials, no network, no spend. The dashboard is
+              served by the same process.
+            </p>
+            <p>
+              Connect at <code>http://127.0.0.1:8787/dashboard/</code> with the demo key
+              <code>demo-key-alpha</code>, then watch the first two requests fall back from
+              <code>fake-primary</code> to <code>fake-backup</code>.
+            </p>
+          </div>
+          <div>
+            <pre><code><span class="comment"># Windows: .venv\Scripts\python</span>
+python -m venv .venv
+.venv/bin/python -m pip install -e ".[dev]"
+.venv/bin/python -m cost_firewall.cli serve --config config.example.toml
+
+<span class="comment"># health, models, and one completion</span>
+curl -s http://127.0.0.1:8787/healthz
+curl -s -H <span class="accent">"Authorization: Bearer demo-key-alpha"</span> \
+  http://127.0.0.1:8787/v1/models</code></pre>
+          </div>
+        </div>
+      </section>
+
+      <section class="section">
+        <div class="wrap">
+          <p class="eyebrow">What it will not do</p>
+          <h2>Limits are part of the contract.</h2>
+          <dl class="limits">
+            <div>
+              <dt>Estimates, not invoices</dt>
+              <dd>
+                Costs come from a configured price table and provider-reported token
+                counts. Reconcile against your provider's billing.
+              </dd>
+            </div>
+            <div>
+              <dt>One database file</dt>
+              <dd>
+                SQLite is the source of truth. The budget gate assumes one writer per
+                deployment, not a shared cluster.
+              </dd>
+            </div>
+            <div>
+              <dt>Process-local limits</dt>
+              <dd>
+                Rate and concurrency caps are enforced per process; the budget transaction
+                is the cross-process invariant.
+              </dd>
+            </div>
+            <div>
+              <dt>Chat completions only</dt>
+              <dd>
+                Non-streaming <code>POST /v1/chat/completions</code>. No tool-call retries
+                and no side-effecting requests.
+              </dd>
+            </div>
+          </dl>
+          <p class="hero__note">
+            <a
+              href="https://github.com/r-bug-r/ai-gateway-cost-firewall/blob/main/docs/threat-model.md"
+              rel="noreferrer"
+              >Threat model</a
+            >
+            ·
+            <a
+              href="https://github.com/r-bug-r/ai-gateway-cost-firewall/blob/main/docs/operations.md"
+              rel="noreferrer"
+              >Operations</a
+            >
+            ·
+            <a
+              href="https://github.com/r-bug-r/ai-gateway-cost-firewall/blob/main/docs/api.md"
+              rel="noreferrer"
+              >API reference</a
+            >
+          </p>
+        </div>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <div class="wrap site-footer__inner">
+        <p>
+          MIT licensed. Built with FastAPI, SQLite, and no cloud dependency. Not affiliated
+          with OpenAI.
+        </p>
+        <nav aria-label="Footer">
+          <a href="https://github.com/r-bug-r/ai-gateway-cost-firewall" rel="noreferrer"
+            >Source</a
+          >
+          ·
+          <a
+            href="https://github.com/r-bug-r/ai-gateway-cost-firewall/blob/main/CHANGELOG.md"
+            rel="noreferrer"
+            >Changelog</a
+          >
+          ·
+          <a
+            href="https://github.com/r-bug-r/ai-gateway-cost-firewall/blob/main/SECURITY.md"
+            rel="noreferrer"
+            >Security</a
+          >
+        </nav>
+      </div>
+    </footer>
+  </body>
+</html>
