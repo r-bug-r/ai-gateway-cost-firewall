@@ -1,0 +1,19 @@
+# Gitleaks configuration.
+#
+# The demo keys below authenticate only against the offline fake providers shipped in
+# config.example.toml, and the sk-live string is a fixture that the redaction tests assert
+# never escapes. Neither can reach a real provider, so they are allowlisted by exact
+# historical value rather than by file path.
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Intentional fake credentials from the offline demo and redaction tests."
+regexTarget = "line"
+regexes = [
+  '''demo-key-(alpha|beta)''',
+  '''smoke-key-alpha''',
+  '''sk-live-TOPSECRET-0123456789''',
+  '''ghp_0123456789abcdefghijklmnopqrstuvwxyz''',
+]

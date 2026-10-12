@@ -29,14 +29,38 @@ jobs:
 
   secret-scan:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Scan history for credentials
-        uses: gitleaks/gitleaks-action@v2
+
+      - name: Install gitleaks
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_VERSION: "8.24.3"
+        run: |
+          set -euo pipefail
+          base="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}"
+          curl -sSfL "$base/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" -o /tmp/gitleaks.tar.gz
+          curl -sSfL "$base/gitleaks_${GITLEAKS_VERSION}_checksums.txt" -o /tmp/gitleaks_checksums.txt
+          (cd /tmp && grep " linux_x64.tar.gz$" gitleaks_checksums.txt | sha256sum -c -)
+          tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
+
+      # Scan every commit rather than the event's diff: a newly created branch has no
+      # parent for the first commit, and full history is the stronger guarantee anyway.
+      - name: Scan history for credentials
+        run: |
+          /tmp/gitleaks detect --source . --config .gitleaks.toml --redact -v \
+            --report-format=sarif --report-path=gitleaks.sarif --exit-code=2
+
+      - name: Upload findings
+        if: always()
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: gitleaks.sarif
 
   codeql:
     runs-on: ubuntu-latest
