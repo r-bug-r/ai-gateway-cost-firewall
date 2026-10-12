@@ -17,6 +17,9 @@ RUN python -m pip install --no-cache-dir .
 RUN useradd --create-home --uid 10001 app \
     && mkdir -p /data \
     && chown -R app:app /data
+# The example config names a relative database path, so the process must start in the
+# writable volume rather than in the root-owned application directory.
+WORKDIR /data
 USER app
 
 EXPOSE 8787
