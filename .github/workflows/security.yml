@@ -43,10 +43,13 @@ jobs:
         run: |
           set -euo pipefail
           base="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}"
-          curl -sSfL "$base/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" -o /tmp/gitleaks.tar.gz
+          archive="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          curl -sSfL "$base/$archive" -o "/tmp/$archive"
           curl -sSfL "$base/gitleaks_${GITLEAKS_VERSION}_checksums.txt" -o /tmp/gitleaks_checksums.txt
-          (cd /tmp && grep " linux_x64.tar.gz$" gitleaks_checksums.txt | sha256sum -c -)
-          tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
+          expected=$(grep " $archive$" /tmp/gitleaks_checksums.txt | awk '{print $1}')
+          actual=$(sha256sum "/tmp/$archive" | awk '{print $1}')
+          test -n "$expected" && test "$expected" = "$actual"
+          tar -xzf "/tmp/$archive" -C /tmp gitleaks
 
       # Scan every commit rather than the event's diff: a newly created branch has no
       # parent for the first commit, and full history is the stronger guarantee anyway.
