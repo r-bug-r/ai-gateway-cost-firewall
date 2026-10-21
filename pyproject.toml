@@ -1,6 +1,6 @@
 [project]
 name = "ai-gateway-cost-firewall"
-version = "0.1.0"
+version = "0.2.0"
 description = "Self-hostable OpenAI-compatible gateway that enforces spend budgets, routes providers, and redacts secrets."
 readme = "README.md"
 requires-python = ">=3.12"

@@ -7,6 +7,8 @@ change the API; every change to a documented contract is listed.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-21
+
 ### Added
 
 - Operator dashboard at `GET /dashboard/`: a budget meter with committed, reserved, and

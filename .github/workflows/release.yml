@@ -41,6 +41,10 @@ jobs:
 
   publish:
     needs: build
+    # The project is not on PyPI yet. Opt in only after configuring a trusted
+    # publisher for this repository and the "release" environment, then set the
+    # repository variable PYPI_PUBLISH=true.
+    if: vars.PYPI_PUBLISH == 'true'
     runs-on: ubuntu-latest
     environment: release
     permissions:
